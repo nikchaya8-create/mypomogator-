@@ -11,17 +11,25 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 # НАСТРОЙКИ БОТА
-BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-CHAT_ID = "YOUR_CHAT_ID"  # Можно узнать переслав сообщение в @userinfobot
-POLLS_THREAD_ID = None  # ID топика "Голосовалки" (если есть разделы)
-TIPS_THREAD_ID = None  # ID топика "Подумай об этом" (если есть разделы)
+# Сначала пробуем взять из переменных окружения Render, затем из введенных в интерфейсе настроек
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID", "YOUR_CHAT_ID")
+
+# Парсим ID топиков
+env_polls_id = os.environ.get("POLLS_THREAD_ID")
+POLLS_THREAD_ID = int(env_polls_id) if env_polls_id and env_polls_id.isdigit() else None
+
+env_tips_id = os.environ.get("TIPS_THREAD_ID")
+TIPS_THREAD_ID = int(env_tips_id) if env_tips_id and env_tips_id.isdigit() else None
 
 # Ключ Gemini API для генерации уникальных советов (Опционально)
 # Если ключа нет, бот будет использовать встроенную базу профессиональных советов
-GEMINI_API_KEY = "YOUR_GEMINI_API_KEY" 
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY")
 
 logging.basicConfig(level=logging.INFO)
-bot = Bot(token=BOT_TOKEN)
+
+# Мы не инициализируем bot на глобальном уровне сразу, чтобы избежать вылета при неверном/пустом токене
+bot = None
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
 
@@ -212,13 +220,40 @@ async def start_web_server():
     logging.info(f"Веб-сервер заглушки запущен на порту {port}")
 
 async def main():
-    setup_scheduler()
-    logging.info("Баскетбольный планировщик успешно запущен!")
+    global bot
+    
+    # Сначала всегда запускаем веб-сервер, чтобы Render успешно прошел проверку порта (Health Check)
     try:
         await start_web_server()
     except Exception as e:
         logging.error(f"Не удалось запустить веб-сервер: {e}")
-    await dp.start_polling(bot)
+
+    # Проверка на наличие токена и валидность формата (в aiogram v3 невалидный токен валит запуск)
+    if not BOT_TOKEN or BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN" or ":" not in BOT_TOKEN:
+        logging.error("❌❌❌ КРИТИЧЕСКАЯ ОШИБКА НАСТРОЙКИ BOT_TOKEN! ❌❌❌")
+        logging.error("Вы не указали реальный токен Telegram-бота!")
+        logging.error("Пожалуйста, перейдите в панель управления Render -> Settings -> Environment Variables")
+        logging.error("и добавьте переменную BOT_TOKEN с вашим токеном от @BotFather, а также CHAT_ID.")
+        logging.error("Бот находится в режиме ожидания настроек. Веб-сервер запущен, деплой на Render успешный!")
+        
+        # Бесконечный цикл ожидания, чтобы процесс не падал и Render не уходил в статус Failed
+        while True:
+            await asyncio.sleep(3600)
+
+    try:
+        # Пытаемся запустить планировщик и опрос бота
+        bot = Bot(token=BOT_TOKEN)
+        setup_scheduler()
+        logging.info("🏀 Баскетбольный планировщик успешно запущен!")
+        logging.info("🤖 Начинаем опрос Telegram (Polling)...")
+        await dp.start_polling(bot)
+    except Exception as e:
+        logging.error(f"❌ Критическая ошибка при запуске бота: {e}")
+        logging.error("Пожалуйста, убедитесь, что BOT_TOKEN и CHAT_ID указаны верно в переменных окружения.")
+        logging.error("Бот усыплен во избежание бесконечного цикла крашей на Render.")
+        # Засыпаем, чтобы веб-сервер продолжал работать и Render оставался Live
+        while True:
+            await asyncio.sleep(3600)
 
 if __name__ == "__main__":
     asyncio.run(main())
