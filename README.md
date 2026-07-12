@@ -1,0 +1,2 @@
+# mypomogator-
+main.py
